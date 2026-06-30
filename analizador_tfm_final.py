@@ -1,9 +1,9 @@
 """
 analizador_tfm_final.py — Generador de informes de malware con IA a partir de CAPE Sandbox
 Versión fusionada:
-  - Extracción completa: behavior.summary, archivos dropeados, SMTP, VirusTotal, familia CAPE
+  - Extracción completa: behavior.summary, archivos dropeados, SMTP, familia CAPE
   - Pre-clasificación heurística como señal AUXILIAR (no autoritativa)
-  - Clasificación derivada de DETECCION_CAPE → VirusTotal → firmas → heurística (en ese orden)
+  - Clasificación derivada de DETECCION_CAPE → firmas → heurística (en ese orden)
   - Sección 0 visible + instrucciones prescriptivas por sección para que el LLM no omita nada
   - num_predict 4000 + num_ctx 8192
 """
@@ -26,7 +26,7 @@ def resolver_ruta(arg_ruta: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # PRE-CLASIFICACIÓN HEURÍSTICA EN PYTHON
 # Señal auxiliar: ancla el LLM pero no es autoritativa.
-# La clasificación final SIEMPRE debe basarse en DETECCION_CAPE y VirusTotal.
+# La clasificación final SIEMPRE debe basarse en DETECCION_CAPE.
 # ─────────────────────────────────────────────────────────────────────────────
 
 CATEGORIAS_MALWARE = {
@@ -105,7 +105,6 @@ def pre_clasificar(
     firmas: list,
     ttps_lista: list,
     payloads: list,
-    familias_vt: list,
 ) -> dict:
     scores = {k: 0 for k in CATEGORIAS_MALWARE}
     evidencias: dict[str, list[str]] = {k: [] for k in CATEGORIAS_MALWARE}
@@ -138,14 +137,7 @@ def pre_clasificar(
             scores["loader_downloader"] += 4
             evidencias["loader_downloader"].append(f"payload:{pl.get('type')}")
 
-    for det in familias_vt:
-        det_l = det.lower()
-        for tipo, cfg in CATEGORIAS_MALWARE.items():
-            for kw in cfg["kw"]:
-                if kw in det_l:
-                    scores[tipo] += 6
-                    evidencias[tipo].append(f"VirusTotal:'{det}'")
-                    break
+ 
 
     max_score = max(scores.values()) if any(scores.values()) else 0
     top_tipo = max(scores, key=scores.get) if max_score > 0 else "indeterminado"
@@ -347,35 +339,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
     if data.get("info", {}).get("category"):
         detecciones_familia["categoria_analisis"] = data["info"]["category"]
 
-    # ── 3. VirusTotal ─────────────────────────────────────────────────────
-    vt_root = (
-        data.get("virustotal")
-        or data.get("target", {}).get("file", {}).get("virustotal")
-        or {}
-    )
-    virustotal_info: dict = {}
-    familias_vt: list[str] = []
-    if vt_root:
-        positivos = vt_root.get("positives", 0)
-        total = vt_root.get("total", 0)
-        virustotal_info["deteccion"] = f"{positivos}/{total}"
-        # Etiqueta sintetizada de VT (suggested_threat_label en la API v3 de CAPE)
-        etiqueta = (
-            vt_root.get("suggested_threat_label")
-            or vt_root.get("threat_label")
-            or vt_root.get("community_noisy_signal", {}).get("label")
-            or ""
-        )
-        if etiqueta:
-            virustotal_info["etiqueta_amenaza"] = etiqueta
-        for _av, res in (vt_root.get("scans") or {}).items():
-            if isinstance(res, dict) and res.get("detected") and res.get("result"):
-                familias_vt.append(res["result"])
-        familias_unicas = sorted(set(familias_vt))
-        if familias_unicas:
-            virustotal_info["familias_detectadas"] = familias_unicas[:25]
-
-    # ── 4. Firmas de comportamiento ───────────────────────────────────────
+    # ── 3. Firmas de comportamiento ───────────────────────────────────────
     firmas_todas: list[dict] = []
     firmas_malware: list[dict] = []
     for sig in data.get("signatures", []):
@@ -396,7 +360,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
     firmas_todas.sort(key=lambda x: x["severidad"], reverse=True)
     firmas_malware.sort(key=lambda x: x["severidad"], reverse=True)
 
-    # ── 5. TTPs MITRE ATT&CK ──────────────────────────────────────────────
+    # ── 4. TTPs MITRE ATT&CK ──────────────────────────────────────────────
     sig_artefactos: dict[str, list[str]] = {}
     for sig in data.get("signatures", []):
         sig_name = sig.get("name", "")
@@ -432,7 +396,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
                     entry += f" [artefacto:{' | '.join(arts[:2])}]"
                 ttps_detectados.append(entry)
 
-    # ── 6. Procesos ───────────────────────────────────────────────────────
+    # ── 5. Procesos ───────────────────────────────────────────────────────
     procesos: list[dict] = []
     seen_proc_names: set[str] = set()
     for proc in data.get("behavior", {}).get("processes", []):
@@ -451,7 +415,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
             "ruta": ruta_proc,
         })
 
-    # ── 7. Comportamiento detallado (behavior.summary) ────────────────────
+    # ── 6. Comportamiento detallado (behavior.summary) ────────────────────
     summary = data.get("behavior", {}).get("summary", {})
     comportamiento: dict = {}
 
@@ -500,7 +464,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
         if apis_por_cat:
             comportamiento["apis_criticas_por_categoria"] = apis_por_cat
 
-    # ── 8. Archivos dropeados ─────────────────────────────────────────────
+    # ── 7. Archivos dropeados ─────────────────────────────────────────────
     archivos_dropeados: list[dict] = []
     for d in (data.get("dropped") or [])[:10]:
         ruta_d = d.get("path", "")
@@ -521,7 +485,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
     if archivos_dropeados:
         comportamiento["archivos_dropeados"] = archivos_dropeados
 
-    # ── 9. Actividad de red ───────────────────────────────────────────────
+    # ── 8. Actividad de red ───────────────────────────────────────────────
     red: dict = {}
 
     net_top = data.get("network", {})
@@ -626,7 +590,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
         if urls_cmds:
             red["urls_en_comandos"] = urls_cmds
 
-    # ── 10. Payloads CAPE ─────────────────────────────────────────────────
+    # ── 9. Payloads CAPE ─────────────────────────────────────────────────
     payloads: list[dict] = []
     for p in data.get("CAPE", {}).get("payloads", [])[:5]:
         entry: dict = {
@@ -645,7 +609,7 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
 
     # ── Pre-clasificación heurística (señal auxiliar) ─────────────────────
     # Se usa firmas_malware (sin evasión) para no contaminar el score con firmas anti-análisis
-    clasificacion = pre_clasificar(firmas_malware[:25], ttps_detectados[:20], payloads, familias_vt)
+    clasificacion = pre_clasificar(firmas_malware[:25], ttps_detectados[:20], payloads)
 
     # ── Resultado final ───────────────────────────────────────────────────
     resultado: dict = {
@@ -659,8 +623,6 @@ def filtrar_reporte_cape(ruta_json: str) -> dict | None:
     }
     if payloads:
         resultado["payloads_cape"] = payloads
-    if virustotal_info:
-        resultado["virustotal"] = virustotal_info
     if detecciones_familia:
         resultado["detecciones_familia"] = detecciones_familia
 
@@ -687,16 +649,6 @@ def construir_resumen_compacto(datos: dict) -> str:
     cape_det = det_fam.get("cape_deteccion") or det_fam.get("cape_deteccion_2")
     if cape_det:
         lines.append(f"DETECCION_CAPE: {cape_det}")
-    vt = datos.get("virustotal", {})
-    if vt:
-        vt_line = f"VIRUSTOTAL: {vt.get('deteccion', '?')}"
-        if vt.get("etiqueta_amenaza"):
-            vt_line += f" | ETIQUETA: {vt['etiqueta_amenaza']}"
-        familias = vt.get("familias_detectadas") or []
-        if familias:
-            vt_line += f" | FAMILIAS: {', '.join(familias[:8])}"
-        lines.append(vt_line)
-    lines.append(f"CLASIFICACION_HEURISTICA_AUXILIAR: {clasi.get('clasificacion','?').upper()} (confianza={clasi.get('confianza','?')})")
 
     # Red aquí — antes de los bloques largos — para que nunca quede truncada por el contexto
     if red.get("dns"):
@@ -814,14 +766,10 @@ def construir_prompt(datos: dict) -> str:
     # (categoria_analisis: "file"/"url" no cuenta — no es una familia de malware)
     det_fam = datos.get("detecciones_familia", {})
     tiene_cape = bool(det_fam.get("cape_deteccion") or det_fam.get("cape_deteccion_2"))
-    tiene_vt = bool(
-        datos.get("virustotal", {}).get("familias_detectadas") or
-        datos.get("virustotal", {}).get("etiqueta_amenaza")
-    )
-    if tiene_cape or tiene_vt:
+    if tiene_cape:
         bloque_heuristica = (
             f"SEÑAL HEURÍSTICA PYTHON (IGNORAR COMPLETAMENTE): {clasi.get('clasificacion', 'indeterminado').upper()}\n"
-            f"  ⛔ Los datos contienen DETECCION_CAPE y/o familias de VIRUSTOTAL.\n"
+            f"  ⛔ Los datos contienen DETECCION_CAPE.\n"
             f"     Clasifica EXCLUSIVAMENTE a partir de esas fuentes autoritativas.\n"
             f"     La clasificación heurística Python es irrelevante y NO debe aparecer en el informe."
         )
@@ -856,11 +804,9 @@ Escribe las explicaciones en español
 R1 — CLASIFICA A PARTIR DE LOS DATOS, NUNCA DE LA CLASIFICACIÓN HEURÍSTICA PYTHON:
   Orden de prioridad inamovible:
     1. DETECCION_CAPE → autoridad máxima: si tiene valor, esa ES la familia. Punto.
-    2. VIRUSTOTAL familias → consenso de múltiples antivirus. Usa el nombre más votado.
-    3. Firmas de sev≥2 + TTPs MITRE → determinan el TIPO genérico cuando 1 y 2 están vacíos.
-    4. Señal heurística Python → SOLO si las tres fuentes anteriores están completamente vacías.
-  No existe ninguna circunstancia en que la heurística Python prevalezca sobre DETECCION_CAPE o VT.
-  Actividad de red (DNS, HTTP, TCP, UDP) NO es suficiente por sí sola para clasificar como RAT.
+    2. Firmas de sev≥2 + TTPs MITRE → determinan el TIPO genérico cuando 1 y 2 están vacíos.
+    3. Señal heurística Python → SOLO si las tres fuentes anteriores están completamente vacías.
+  No existe ninguna circunstancia en que la heurística Python prevalezca sobre DETECCION_CAPE.
 
 R2 — SOLO VALORES QUE APARECEN EN LOS DATOS:
   Incorrecto: "El malware cifra archivos en [ruta]"
@@ -878,25 +824,6 @@ R4 — ANALIZA EL COMPORTAMIENTO ESPECÍFICO DE ESTA MUESTRA:
 ════════════════════════════════════════════════════════════════════════
 
 ESTRUCTURA DEL INFORME — Desarrolla TODAS las secciones en orden:
-
-## 0. CLASIFICACIÓN RAZONADA
-Escribe este análisis paso a paso (es visible en el informe final):
-1. DETECCION_CAPE: copia el valor exacto del campo DETECCION_CAPE, o escribe "No presente en este análisis"
-2. VirusTotal:
-   - Si existe "ETIQUETA:" en la línea VIRUSTOTAL, úsala como síntesis del veredicto VT (ej: "trojan.dloader/abmdownloader" → Downloader/Loader).
-   - Lista las familias más frecuentes del campo "FAMILIAS:", o "No disponible".
-3. Firmas top-3 por severidad: [nombre exacto](sev=X) → qué comportamiento concreto delata
-4. TTPs por táctica MITRE: agrupa en Ejecución | Persistencia | Evasión | C2 | Exfiltración | Impacto
-5. VEREDICTO FINAL — sigue este orden estricto e inamovible:
-   a) Si DETECCION_CAPE tiene valor → el malware ES esa familia (ej: "AsyncRAT", "AgentTesla", "Lokibot").
-      Confirma citando 2-3 firmas o TTPs que respalden esa familia concreta.
-   b) Si DETECCION_CAPE está vacío pero VIRUSTOTAL tiene familias → usa el nombre más frecuente entre
-      los motores de VT. Confirma con firmas y TTPs.
-   c) Si DETECCION_CAPE y VIRUSTOTAL están ambos vacíos → clasifica por tipo genérico
-      (ransomware / infostealer / loader / RAT / miner / banker / worm…) basándote exclusivamente
-      en las firmas de sev≥2 y los TTPs. Explica qué combinación de señales lleva a ese tipo.
-   PROHIBIDO en los tres casos: usar la clasificación heurística Python como argumento principal.
-   PROHIBIDO: clasificar como RAT únicamente porque hay actividad de red o conexiones TCP/UDP.
 
 ## 1. RESUMEN EJECUTIVO
 - Nombre del archivo/URL: copia el valor exacto de la línea "ARCHIVO:" o "URL:" del bloque de datos
@@ -1039,13 +966,9 @@ def main() -> None:
     cape_det = det_fam.get("cape_deteccion") or det_fam.get("cape_deteccion_2")
     if cape_det:
         print(f"\n✅ DETECCIÓN CAPE (familia confirmada): {cape_det}")
-    vt_info = datos.get("virustotal", {})
-    if vt_info.get("familias_detectadas"):
-        print(f"✅ VIRUSTOTAL: {vt_info['deteccion']} | Top familias: "
-              f"{', '.join(vt_info['familias_detectadas'][:5])}")
 
     clasi = datos.get("clasificacion_heuristica", {})
-    tiene_autoridad = bool(cape_det or vt_info.get("familias_detectadas"))
+    tiene_autoridad = bool(cape_det)
     if not tiene_autoridad:
         print(f"\n📊 Clasificación heurística (sin detección autoritativa): "
               f"{clasi.get('clasificacion', 'N/A').upper()} "
