@@ -2,7 +2,6 @@
  
 Sistema de análisis dinámico de malware que combina **CAPE Sandbox** como motor de ejecución con un **LLM local (Llama 3 vía Ollama)** para generar informes de análisis en lenguaje natural, a partir del `report.json` que genera CAPE.
  
-Trabajo de Fin de Máster — Máster Universitario en Ciberseguridad, UNIR.
  
 ## Componentes de este repositorio
  
