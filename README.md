@@ -1,4 +1,4 @@
-# Sandbox de Análisis de Malware con IA
+# Creación de Sandbox de Análisis de Malware
  
 Sistema de análisis dinámico de malware que combina **CAPE Sandbox** como motor de ejecución con un **LLM local (Llama 3 vía Ollama)** para generar informes de análisis en lenguaje natural, a partir del `report.json` que genera CAPE.
  
